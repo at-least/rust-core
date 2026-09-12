@@ -1,62 +1,37 @@
-//! S-spike (PLAN.md W9): the russh transport crate — terminal-core's
-//! former `ssh_spike` module, extracted verbatim at S1 (PLAN.md §3.6).
-//! Default builds (`cargo test` in this crate, no features) are the
-//! plain-Rust no-FFI shape; the UniFFI namespace `ssh_transport` compiles
-//! in behind the `uniffi` feature and reaches the apps through
-//! terminal-core's cdylib when that crate's `uniffi` + `ssh-spike`
-//! features are on together (the COMMITTED artifacts, regenerated via
-//! `CONCH_SSH_FEATURES=ssh-spike` — the apps' S direct cutover, the only
-//! transport since 2026-09-09).
+//! The russh transport crate — pure Rust, deliberately FFI-free.
 //!
-//! **Streaming FFI design (adjudicated, W9):** the shell channel streams
-//! through a UniFFI CALLBACK INTERFACE (push), not polling/streams. The
-//! channel's read half lives in a Rust pump task on this module's own
-//! tokio runtime and pushes `SshSpikeEvent`s to the foreign sink; the
-//! write half stays in the `SshSpikeSession` object for foreign-side
-//! `write`/`resize`/`exec`. Rationale: terminal data is server-push and
-//! both apps already consume event-driven callbacks today (Android
-//! `SshSession.Callbacks.onData` → `feedAndInvalidate`; iOS SSHSession's
-//! output handler); a poll model would need a foreign-side pump thread
-//! anyway and adds latency.
+//! History: W9 spike → conch's `ssh_spike` module → S1 workspace crate →
+//! S2 moved here from conch. The FFI annotations that used to live here
+//! moved OUT at the FFI-ownership flip (2026-09-12): **shared crates are
+//! pure Rust; the FFI boundary is owned by each consuming app**, because
+//! the boundary is the app's most safety-critical surface (threading,
+//! panics, memory) and must be designed and tested per app. conch's
+//! wrapper lives in conch (`shared/ssh-ffi`); own-music/own-video will
+//! design their own SFTP-shaped surfaces over this same API.
 //!
-//! **Host-key verification (advisor requirement):** `check_server_key`
-//! hands the wire `(algorithm, blob)` to the FOREIGN
-//! `SshSpikeHostKeyVerifier` callback — the seam where each app's
-//! KnownHostsStore/Tofu flow plugs in (Android backs it with the real
-//! `KnownHostsStore`; see KnownHostsShadowTest for the store-backed
-//! verifier). russh's default is deny, and this module never bypasses it.
-//!
-//! **Keepalive/reconnect mapping (adjudicated):** keepalive maps to
-//! russh `Config.keepalive_interval` (set here); reconnection stays
-//! NATIVE (SessionReconnector/ReconnectController own the backoff policy
-//! and simply dial a new session — a transport swap does not move it).
-//!
-//! SFTP rides russh-sftp =3.0.0 (russh 0.63's own dev-dependency version)
-//! over a session channel with the `sftp` subsystem.
-//!
-//! Threading contract: `connect`/`exec`/`sftp_read`/`direct_tcpip_banner`
-//! block the calling thread (call from a background thread, exactly like
-//! the sshj/Citadel paths today); `write`/`resize`/`close` are
+//! Shape (unchanged by the flip): `connect` dials (optionally through a
+//! ProxyJump chain), authenticates, opens a PTY+shell channel and pumps
+//! `SshSpikeEvent`s into the caller's `SshSpikeEventSink` from this
+//! crate's own tokio runtime; exec/SFTP/direct-tcpip hang off the
+//! session; host keys go to the caller's `SshSpikeHostKeyVerifier`
+//! (russh's default is deny — this crate never bypasses it); keepalive
+//! maps to russh's `keepalive_interval`; reconnection stays the caller's
+//! job. Threading contract: `connect`/`exec`/`sftp`/`direct_tcpip_banner`
+//! block the calling thread; `write`/`resize`/`disconnect` are
 //! fire-and-forget sends.
-
-#[cfg(feature = "uniffi")]
-uniffi::setup_scaffolding!();
+//!
+//! SFTP rides russh-sftp =3.0.0 over a session channel with the `sftp`
+//! subsystem. `known_hosts` carries the blob helpers the transport logs
+//! with (see that module's doc).
 
 pub mod known_hosts;
 
 use std::sync::{Arc, Mutex};
 
-/// Bumped whenever this namespace's FFI surface changes, so a stale
-/// committed binding fails loudly instead of misbehaving (mirrors
-/// terminal-core's `UNIFFI_BRIDGE_VERSION`; S2 made this crate
-/// cross-repo consumed, so the const must live with the crate).
+/// The FFI-facing bridge version. Consumers' ffi layers re-export this
+/// through their OWN namespace so a stale committed binding fails loudly;
+/// the value bumps whenever this crate's wrapped surface changes.
 pub const SSH_TRANSPORT_BRIDGE_VERSION: u32 = 1;
-
-/// The namespace bridge version, exported through the FFI.
-#[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn ssh_transport_bridge_version() -> u32 {
-    SSH_TRANSPORT_BRIDGE_VERSION
-}
 
 use std::time::Duration;
 
@@ -66,7 +41,6 @@ use russh::{Channel, ChannelMsg, ChannelReadHalf, ChannelWriteHalf};
 
 /// Typed error surface — UniFFI requires a declared error for Result
 /// exports (the bindgen rejects `Result<_, String>`: "unknown throw type").
-#[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 #[derive(Debug, thiserror::Error)]
 pub enum SshSpikeError {
     #[error("connection failed: {0}")]
@@ -87,7 +61,6 @@ pub enum SshSpikeError {
     Sftp(String),
 }
 
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone)]
 pub enum SshSpikeAuth {
     Password {
@@ -103,7 +76,6 @@ pub enum SshSpikeAuth {
 
 /// Push events for a session's interactive shell channel (the streaming
 /// contract; see the module header for the callback-vs-poll adjudication).
-#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum SshSpikeEvent {
     Data {
@@ -124,7 +96,6 @@ pub enum SshSpikeEvent {
 /// Foreign sink for session events. Called from this module's runtime
 /// threads — foreign implementations hop to their own dispatchers (the
 /// existing `Callbacks`/output-handler contracts do this already).
-#[cfg_attr(feature = "uniffi", uniffi::export(callback_interface))]
 pub trait SshSpikeEventSink: Send + Sync {
     fn on_event(&self, event: SshSpikeEvent);
 }
@@ -135,7 +106,6 @@ pub trait SshSpikeEventSink: Send + Sync {
 /// with jump chains every hop presents its own key, so the foreign side can
 /// only make the right TOFU decision when told WHICH (host, port) it is
 /// looking at — the stream behind a jumped dial has no socket address.
-#[cfg_attr(feature = "uniffi", uniffi::export(callback_interface))]
 pub trait SshSpikeHostKeyVerifier: Send + Sync {
     fn verify_host_key(
         &self,
@@ -151,7 +121,6 @@ pub trait SshSpikeHostKeyVerifier: Send + Sync {
 /// to us. The foreign side owns the byte pipe through the channel object.
 /// Facades MUST catch-and-decide around the callback body — a foreign throw
 /// must never cross back into Rust.
-#[cfg_attr(feature = "uniffi", uniffi::export(callback_interface))]
 pub trait SshSpikeForwardSink: Send + Sync {
     fn on_connection(
         &self,
@@ -165,13 +134,11 @@ pub trait SshSpikeForwardSink: Send + Sync {
 /// `read` returns the next chunk of server data — an EMPTY vector means the
 /// remote half-closed (CHANNEL_EOF) or the channel closed; `write` sends;
 /// `eof` half-closes the local side; `disconnect` shuts the whole channel.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct SshSpikeChannel {
     read_half: Mutex<ChannelReadHalf>,
     write_half: Mutex<Option<ChannelWriteHalf<Msg>>>,
 }
 
-#[cfg_attr(feature = "uniffi", uniffi::export)]
 impl SshSpikeChannel {
     /// Blocking read of the next data chunk; empty = EOF. Call from a
     /// background thread. EOF is BOTH the remote half-close (CHANNEL_EOF)
@@ -236,12 +203,10 @@ impl SshSpikeChannel {
 /// [SshSpikeSftp] are for the small-file paths. `read` returns the next
 /// chunk; an EMPTY vector means EOF. `disconnect` (not `close`: UniFFI
 /// AutoCloseable collision, the §9 gotcha) closes the handle.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct SshSpikeRemoteFile {
     file: Mutex<Option<russh_sftp::client::fs::File>>,
 }
 
-#[cfg_attr(feature = "uniffi", uniffi::export)]
 impl SshSpikeRemoteFile {
     /// Next chunk of file content; empty = EOF. Blocks the caller.
     #[allow(clippy::await_holding_lock)] // the file handle is foreign-caller-serialized by contract
@@ -381,7 +346,6 @@ impl Handler for ProbeHandler {
 }
 
 /// Connection parameters (bundled to keep the FFI surface narrow).
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone)]
 pub struct SshSpikeConnectParams {
     pub host: String,
@@ -403,7 +367,6 @@ pub struct SshSpikeConnectParams {
 
 /// One jump hop: an independent SSH connection whose direct-tcpip channel
 /// carries the next hop's transport.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone)]
 pub struct SshSpikeJump {
     pub host: String,
@@ -414,7 +377,6 @@ pub struct SshSpikeJump {
 
 /// The interactive session: one PTY+shell channel whose read half is
 /// pumped into the foreign sink, plus a handle for exec/SFTP/direct-tcpip.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct SshSpikeSession {
     write_half: Mutex<Option<ChannelWriteHalf<Msg>>>,
     handle: Mutex<Option<russh::client::Handle<ProbeHandler>>>,
@@ -471,12 +433,10 @@ fn pump(read_half: ChannelReadHalf, events: Arc<Box<dyn SshSpikeEventSink>>) {
     });
 }
 
-#[cfg_attr(feature = "uniffi", uniffi::export)]
 impl SshSpikeSession {
     /// Dials, authenticates, opens a PTY + shell channel, and starts the
     /// event pump. Blocks the calling thread for the handshake — call from
     /// a background thread (same contract as the sshj/Citadel paths).
-    #[cfg_attr(feature = "uniffi", uniffi::constructor)]
     pub fn connect(
         params: SshSpikeConnectParams,
         events: Box<dyn SshSpikeEventSink>,
@@ -934,14 +894,12 @@ async fn authenticate(
 /// the app contract — which russh-sftp's own `write` (WRITE-only flags)
 /// does not provide, hence the explicit flags here. All methods block the
 /// caller; call from a background thread (same contract as `exec`).
-#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct SshSpikeSftp {
     sftp: russh_sftp::client::SftpSession,
 }
 
 /// File metadata for the SFTP tree (the fields the apps' file browsers
 /// render); timestamps are unix seconds.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone)]
 pub struct SshSpikeFileMeta {
     pub size: u64,
@@ -953,7 +911,6 @@ pub struct SshSpikeFileMeta {
 }
 
 /// One `read_dir` entry: name plus the same metadata fields.
-#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
 #[derive(Debug, Clone)]
 pub struct SshSpikeDirEntry {
     pub file_name: String,
@@ -983,7 +940,6 @@ fn meta_record(
     )
 }
 
-#[cfg_attr(feature = "uniffi", uniffi::export)]
 impl SshSpikeSftp {
     /// Full file contents (small-file convenience, SftpInteraction parity).
     pub fn read(&self, path: String) -> Result<Vec<u8>, SshSpikeError> {
@@ -1485,15 +1441,16 @@ mod tests {
         // keyA is installed for bothuser on the key-only instance. Resolve
         // the keys dir the way run.sh does so RUST_CORE_MATRIX_KEYS /
         // XDG_CACHE_HOME layouts find it too.
-        let keys_dir = std::env::var("RUST_CORE_MATRIX_KEYS").unwrap_or_else(|_| {
-            match std::env::var("XDG_CACHE_HOME") {
-                Ok(x) => format!("{x}/rust-core/sshd-matrix/keys"),
-                Err(_) => format!(
-                    "{}/.cache/rust-core/sshd-matrix/keys",
-                    std::env::var("HOME").unwrap()
-                ),
-            }
-        });
+        let keys_dir =
+            std::env::var("RUST_CORE_MATRIX_KEYS").unwrap_or_else(|_| {
+                match std::env::var("XDG_CACHE_HOME") {
+                    Ok(x) => format!("{x}/rust-core/sshd-matrix/keys"),
+                    Err(_) => format!(
+                        "{}/.cache/rust-core/sshd-matrix/keys",
+                        std::env::var("HOME").unwrap()
+                    ),
+                }
+            });
         let key_path = format!("{keys_dir}/keyA");
         let Ok(pem) = std::fs::read_to_string(&key_path) else {
             // Matrix up but keys missing is a degraded matrix — the same
