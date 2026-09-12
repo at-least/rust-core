@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # The crates' own suites. The matrix job below is the only path that
+  # RUNS the transport tests against live servers; this job compiles
+  # everything and runs what runs without servers.
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: cargo test (locked)
+        run: cargo test --locked
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  # The transport tests (auth/exec/sftp/forwarding/jump, the
+  # map_connect_error pin, the known_hosts codec pins) need live sshd
+  # containers — this job starts the real-OpenSSH matrix and sets the env
+  # gate so a down matrix FAILS instead of skipping green.
+  sshd-matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Start sshd matrix (default + all distro variants + alt servers)
+        run: tools/sshd-matrix/run.sh --variants --servers
+
+      - name: Transport tests (matrix up)
+        run: cargo test --locked
+        env:
+          CONCH_SSHD_MATRIX_REQUIRED: "1"

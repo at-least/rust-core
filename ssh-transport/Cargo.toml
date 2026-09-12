@@ -1,0 +1,30 @@
+[package]
+name = "ssh-transport"
+version = "0.1.0"
+edition = "2021"
+# The russh transport + SFTP crate (S1, PLAN.md §3.6): terminal-core's
+# former `ssh_spike` module, extracted verbatim. It owns its own UniFFI
+# namespace `ssh_transport` (uniffi.toml pins the Kotlin cdylib name to
+# terminal_core and the Swift FFI module to terminal_coreFFI so both
+# namespaces ship inside conch's single dylib/framework). Consumed by
+# terminal-core behind the `ssh-spike` feature; moves to the org
+# rust-core repo at S2 with the exact pins below intact — russh was
+# probe-verified against the real-OpenSSH matrix (PLAN.md W9).
+[dependencies]
+russh = "=0.63.2"
+russh-sftp = "=3.0.0"
+# Non-optional here: this crate's whole job is the async transport; the
+# no-FFI story is about uniffi (see [features]), not about tokio.
+tokio = { version = "=1.53.1", features = ["rt-multi-thread", "net", "io-util", "time", "sync"] }
+thiserror = "2"
+# Host-key blob fingerprints (known_hosts module) — same pin as terminal-core.
+sha2 = "=0.11.0"
+# Same version pin discipline as terminal-core: generated bindings embed
+# the runtime and must match the crate.
+uniffi = { version = "=0.32.0", optional = true }
+[features]
+# Off by default: `cargo test` in this crate is the plain-Rust (no-FFI)
+# build, which the no-bridge CI check and the sshd-matrix job both run.
+uniffi = ["dep:uniffi", "uniffi/tokio"]
+[lib]
+name = "ssh_transport"

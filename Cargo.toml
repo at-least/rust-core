@@ -1,0 +1,10 @@
+[workspace]
+# The Rust crates shared by the at-least apps (conch, own-music,
+# own-video, pttinapp). Each app repo pins a rev of this repo from its
+# own thin ffi crate; nothing here is consumed by path from an app repo.
+members = ["ssh-transport"]
+resolver = "2"
+
+# Profiles live at the workspace root only.
+[profile.release]
+strip = "debuginfo"
