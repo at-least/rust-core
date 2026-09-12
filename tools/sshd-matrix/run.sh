@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # Starts rust-core's OWN SSH test matrix for the transport crate — a fork of
 # conch-android's matrix (S2): same ports (the tests pin them) so the two
 # matrices must never run at the same time, but a distinct container name,
