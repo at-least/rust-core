@@ -38,6 +38,15 @@ platform resource it cannot own end to end. HTTP byte transfer, OAuth
 interactive flows, and token storage are platform-side
 `HttpExecutor`/`TokenStore` callbacks — never reqwest in the core.
 
+**Crates here are pure Rust — no uniffi.** (FFI-ownership flip,
+2026-09-12, user-directed; advisor-approved.) The FFI boundary is the
+app's most safety-critical surface — threading, panics, memory across
+the wire — so each consuming app OWNS its ffi layer: conch's wrapper is
+conch `shared/ssh-ffi` (namespace `ssh_transport`, delegating 1:1 to
+this repo's `ssh-transport`); own-music/own-video will design their own
+SFTP-shaped surfaces. Consequence: the FFI shape is free to differ per
+app, and this repo's API is judged by plain-Rust tests alone.
+
 ## 3. Standing rules
 
 1. Never delete a native core until the Rust candidate passes the SAME
