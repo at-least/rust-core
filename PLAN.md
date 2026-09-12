@@ -59,6 +59,9 @@ app, and this repo's API is judged by plain-Rust tests alone.
    CI gates (fmt/clippy/test), and for the transport, the sshd matrix
    (`tools/sshd-matrix`, env-gated with `CONCH_SSHD_MATRIX_REQUIRED=1`
    in CI so a down matrix FAILS instead of skipping green).
+4b. `tools/sshd-matrix/run.sh` is bash (arrays throughout) — keep the
+   `#!/usr/bin/env bash` shebang; `/bin/sh` (dash on CI) dies at parse
+   time. The first CI run caught exactly that.
 5. **A crate lands here when (and only when) a second REPO needs to
    depend on it** (repos, not platforms — pttinapp's two apps are one
    consumer). Single-consumer crates stay in their app's repo: conch
