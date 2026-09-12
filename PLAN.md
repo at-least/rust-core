@@ -21,10 +21,10 @@ reality wins — verify, then fix this file.
 |---|---|---|
 | S1 | in-conch workspace split of `ssh_spike.rs` (proved the seam, its own UniFFI namespace) | done 2026-09-12, conch `7dd365f` |
 | S2 | this repo is born: `ssh-transport` + the Rust-level sshd matrix move here; conch switches to a pinned-rev git dep | done 2026-09-12 |
-| S3 | own-music pure logic core (`music-core`: scanner/parsers/canonical JSON/sync rules) | plan: own-music `PLAN.md` §13 |
+| S3 | own-music pure logic core (`music-core`: scanner/parsers/canonical JSON/sync rules) — single consumer, stays in own-music | plan: own-music `PLAN.md` §13 |
 | S4 | own-music providers + storage (rusqlite, HttpExecutor/TokenStore callbacks) | plan: own-music `PLAN.md` §13 |
 | S5 | `terminal-engine` extraction (from conch) + `bbs-core` (pttinapp; pre-gates: ptt.cc kex probe, dual-color CJK render probe — pttinapp `PLAN.md`) | plan: pttinapp `PLAN.md` |
-| S6 | own-video `video-transfer` (protocol logic; socket stays native unless a parity bug) | plan: own-video `PLAN.md` |
+| S6 | own-video `video-transfer` (protocol logic; socket stays native unless a parity bug) — single consumer, stays in own-video | plan: own-video `PLAN.md` |
 
 Per-stage detail lives in the consuming repo's PLAN.md; this file
 records what has landed here and what moves here next.
@@ -50,8 +50,15 @@ interactive flows, and token storage are platform-side
    CI gates (fmt/clippy/test), and for the transport, the sshd matrix
    (`tools/sshd-matrix`, env-gated with `CONCH_SSHD_MATRIX_REQUIRED=1`
    in CI so a down matrix FAILS instead of skipping green).
-5. Out of scope, do not re-propose: telnet:23, CI-published artifact
-   registries, per-domain repos, PttProbe, moving the Go backend.
+5. **A crate lands here when (and only when) a second REPO needs to
+   depend on it** (repos, not platforms — pttinapp's two apps are one
+   consumer). Single-consumer crates stay in their app's repo: conch
+   keeps terminal-core in-conch, own-music keeps music-core,
+   own-video keeps video-transfer. Promotion is cheap when a second
+   consumer appears — the S2 mechanics, already proven.
+6. Out of scope, do not re-propose: telnet:23, CI-published artifact
+   registries, per-domain repos for the shared crates, PttProbe,
+   moving the Go backend.
 
 ## 4. Environment facts
 

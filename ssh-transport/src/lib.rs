@@ -1483,13 +1483,13 @@ mod tests {
             return;
         }
         // keyA is installed for bothuser on the key-only instance. Resolve
-        // the keys dir the way run.sh does so CONCH_ANDROID_MATRIX_KEYS /
+        // the keys dir the way run.sh does so RUST_CORE_MATRIX_KEYS /
         // XDG_CACHE_HOME layouts find it too.
-        let keys_dir = std::env::var("CONCH_ANDROID_MATRIX_KEYS").unwrap_or_else(|_| {
+        let keys_dir = std::env::var("RUST_CORE_MATRIX_KEYS").unwrap_or_else(|_| {
             match std::env::var("XDG_CACHE_HOME") {
-                Ok(x) => format!("{x}/conch-android/sshd-matrix/keys"),
+                Ok(x) => format!("{x}/rust-core/sshd-matrix/keys"),
                 Err(_) => format!(
-                    "{}/.cache/conch-android/sshd-matrix/keys",
+                    "{}/.cache/rust-core/sshd-matrix/keys",
                     std::env::var("HOME").unwrap()
                 ),
             }

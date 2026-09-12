@@ -1,10 +1,13 @@
 #!/bin/sh
-# Starts conch-android's OWN SSH test matrix — deliberately independent of
+# Starts rust-core's OWN SSH test matrix for the transport crate — a fork of
+# conch-android's matrix (S2): same ports (the tests pin them) so the two
+# matrices must never run at the same time, but a distinct container name,
+# image tag and key dir so neither clobbers the other.
 # the conch-ios harness (scripts/sshd-matrix there): separate image tag,
 # container name, host ports and keys, so both projects' matrices can run
 # side by side.
 #
-# Default container (conch-android-sshd, debian bookworm, OpenSSH 9.2):
+# Default container (rust-core-sshd, debian bookworm, OpenSSH 9.2):
 #   host 2233 → 2223  password + pubkey   pwuser/conch-pw-1, bothuser/conch-pw-2 (keyA)
 #   host 2234 → 2224  pubkey only         keyuser (keyB, keyRSA, keyECDSA), bothuser (keyA)
 #   host 2235 → 2225  password + pubkey   forwarding allowed (tunnels, agent, jump, SOCKS)
@@ -45,7 +48,7 @@
 #
 # Idempotent: reuses a running container as-is. --rebuild force-recreates
 # (drops active sessions; host keys change). --stop removes everything.
-# Keys live in ${CONCH_ANDROID_MATRIX_KEYS:-~/.cache/conch-android/sshd-matrix/keys},
+# Keys live in ${RUST_CORE_MATRIX_KEYS:-~/.cache/rust-core/sshd-matrix/keys},
 # generated once and reused.
 #
 # Opt-in JVM tests run against it with:
@@ -53,11 +56,11 @@
 # and, with the variants/servers up, additionally -Dconch.distroMatrix=true
 set -eu
 
-NAME=conch-android-sshd
-IMAGE=conch-android-sshd:latest
+NAME=rust-core-sshd
+IMAGE=rust-core-sshd:latest
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-KEYS_DIR=${CONCH_ANDROID_MATRIX_KEYS:-"${XDG_CACHE_HOME:-$HOME/.cache}/conch-android/sshd-matrix/keys"}
-DOCKER_SOCK=${CONCH_ANDROID_DOCKER_SOCK:-/var/run/docker.sock}
+KEYS_DIR=${RUST_CORE_MATRIX_KEYS:-"${XDG_CACHE_HOME:-$HOME/.cache}/rust-core/sshd-matrix/keys"}
+DOCKER_SOCK=${RUST_CORE_DOCKER_SOCK:-/var/run/docker.sock}
 
 # name=base=first-host-port
 VARIANTS="ubuntu2004=ubuntu:20.04=2243
@@ -80,15 +83,15 @@ generate_keys() {
     for k in keyA keyB keyC ca; do
         [ -f "$KEYS_DIR/$k" ] && continue
         log "generating $KEYS_DIR/$k (ed25519)"
-        ssh-keygen -q -t ed25519 -N '' -C "conch-android-test-$k" -f "$KEYS_DIR/$k"
+        ssh-keygen -q -t ed25519 -N '' -C "rust-core-test-$k" -f "$KEYS_DIR/$k"
     done
     if [ ! -f "$KEYS_DIR/keyRSA" ]; then
         log "generating $KEYS_DIR/keyRSA (rsa 3072)"
-        ssh-keygen -q -t rsa -b 3072 -N '' -C conch-android-test-keyRSA -f "$KEYS_DIR/keyRSA"
+        ssh-keygen -q -t rsa -b 3072 -N '' -C rust-core-test-keyRSA -f "$KEYS_DIR/keyRSA"
     fi
     if [ ! -f "$KEYS_DIR/keyECDSA" ]; then
         log "generating $KEYS_DIR/keyECDSA (ecdsa p256)"
-        ssh-keygen -q -t ecdsa -b 256 -N '' -C conch-android-test-keyECDSA -f "$KEYS_DIR/keyECDSA"
+        ssh-keygen -q -t ecdsa -b 256 -N '' -C rust-core-test-keyECDSA -f "$KEYS_DIR/keyECDSA"
     fi
     # A DEDICATED key for the certificate scenario: sshj (like the OpenSSH
     # client) auto-loads a sibling <key>-cert.pub and then presents the
@@ -96,11 +99,11 @@ generate_keys() {
     # is used only by the cert test; keyA/keyB stay pristine.
     if [ ! -f "$KEYS_DIR/keyCert" ]; then
         log "generating $KEYS_DIR/keyCert (ed25519) for the certificate scenario"
-        ssh-keygen -q -t ed25519 -N '' -C conch-android-test-keyCert -f "$KEYS_DIR/keyCert"
+        ssh-keygen -q -t ed25519 -N '' -C rust-core-test-keyCert -f "$KEYS_DIR/keyCert"
     fi
     if [ ! -f "$KEYS_DIR/keyCert-cert.pub" ]; then
         log "signing keyCert with ca for principal certuser → keyCert-cert.pub"
-        ssh-keygen -q -s "$KEYS_DIR/ca" -I conch-android-test-cert -n certuser -V -1d:+3650d "$KEYS_DIR/keyCert.pub"
+        ssh-keygen -q -s "$KEYS_DIR/ca" -I rust-core-test-cert -n certuser -V -1d:+3650d "$KEYS_DIR/keyCert.pub"
     fi
     # A syntactically valid sk-ssh-ed25519 public key: type, 32-byte key,
     # application string "ssh:". Made from keyC's raw public key so it is
